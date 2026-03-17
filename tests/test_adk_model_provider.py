@@ -4,7 +4,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from shared.adk_model_provider import build_agent_model
+from shared.adk_model_provider import (
+    build_agent_generation_config,
+    build_agent_model,
+)
 
 
 class FakeLiteLlm:
@@ -33,6 +36,45 @@ class AdkModelProviderTest(unittest.TestCase):
             model = build_agent_model("ati_search", default_provider="azure")
 
         self.assertEqual(model, "gemini-legacy")
+
+    def test_generation_config_uses_scoped_max_output_tokens(self) -> None:
+        env = {
+            "ATI_SEARCH_MAX_OUTPUT_TOKENS": "128",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            config = build_agent_generation_config("ati_search")
+
+        self.assertIsNotNone(config)
+        self.assertEqual(config.max_output_tokens, 128)
+
+    def test_generation_config_returns_none_when_unset(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = build_agent_generation_config("ati_search")
+
+        self.assertIsNone(config)
+
+    def test_generation_config_rejects_non_integer_values(self) -> None:
+        env = {
+            "ATI_SEARCH_MAX_OUTPUT_TOKENS": "abc",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(RuntimeError) as context:
+                build_agent_generation_config("ati_search")
+
+        self.assertIn("ATI_SEARCH_MAX_OUTPUT_TOKENS must be an integer", str(context.exception))
+
+    def test_generation_config_rejects_non_positive_values(self) -> None:
+        env = {
+            "ATI_SEARCH_MAX_OUTPUT_TOKENS": "0",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(RuntimeError) as context:
+                build_agent_generation_config("ati_search")
+
+        self.assertIn(
+            "ATI_SEARCH_MAX_OUTPUT_TOKENS must be greater than zero",
+            str(context.exception),
+        )
 
     def test_azure_v1_endpoint_uses_openai_compatible_litellm(self) -> None:
         env = {
@@ -83,9 +125,19 @@ class AdkModelProviderTest(unittest.TestCase):
         env = {
             "ATI_SEARCH_PROVIDER": "azure",
         }
-        with patch.dict(os.environ, env, clear=True):
-            with self.assertRaises(RuntimeError) as context:
-                build_agent_model("ati_search", default_provider="azure")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            shared_dir = root / "shared"
+            shared_dir.mkdir()
+            with patch.dict(os.environ, env, clear=True), patch(
+                "shared.adk_model_provider._REPO_ROOT_DIR",
+                root,
+            ), patch(
+                "shared.adk_model_provider._SHARED_DIR",
+                shared_dir,
+            ):
+                with self.assertRaises(RuntimeError) as context:
+                    build_agent_model("ati_search", default_provider="azure")
 
         message = str(context.exception)
         self.assertIn("ATI_SEARCH provider 'azure'", message)

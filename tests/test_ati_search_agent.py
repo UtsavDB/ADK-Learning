@@ -177,6 +177,48 @@ class AtiSearchAgentTest(unittest.TestCase):
             any("Code-content search" in note or "code search timed out" in note.lower() for note in result["summary"]["notes"])
         )
 
+    def test_code_search_http_500_falls_back_to_path_matching(self) -> None:
+        repos = [{"name": "RepoA", "id": "1", "default_branch": "refs/heads/main"}]
+        path_payload = {
+            "value": [
+                {"path": "/src/TFS_SprintReport.py", "isFolder": False},
+            ]
+        }
+
+        def fake_request(method, url, config, **kwargs):
+            if "codesearchresults" in url:
+                return FakeResponse(status_code=500, text='{"count":1,"value":{"Message":"An error has occurred."}}')
+            return FakeResponse(status_code=200, json_data=path_payload)
+
+        with patch.dict(
+            "os.environ",
+            {"TFS_URL": "http://tfs", "PROJECT": "Proj", "PAT": "pat"},
+            clear=True,
+        ):
+            with patch.object(tfs_tool, "list_repositories", return_value=(repos, {"repositories": repos})):
+                with patch.object(tfs_tool, "tfs_request", side_effect=fake_request):
+                    result = tfs_tool.tfs_git_search("SprintReport", include_work_items=False, top=5)
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["summary"]["git_matches"][0]["match_type"], "path_match")
+        self.assertTrue(
+            any("code-content search is unavailable" in note.lower() for note in result["summary"]["notes"])
+        )
+
+    def test_work_item_query_text_avoids_top_clause_for_tfs_2018_compatibility(self) -> None:
+        config = {
+            "tfs_url": "http://tfs",
+            "project": "Proj",
+            "pat": "pat",
+            "api_version": "4.1",
+            "default_repo": "",
+        }
+
+        query = tfs_tool.work_item_query_text("SprintReport", 5, config)
+
+        self.assertIn("SELECT [System.Id]", query)
+        self.assertNotIn("TOP 5", query)
+
     def test_root_agent_exposes_both_tools(self) -> None:
         self.assertTrue(hasattr(agent.root_agent, "tools"))
         self.assertEqual(len(agent.root_agent.tools), 2)

@@ -267,7 +267,7 @@ def search_code_api(
         return [], notes, raw
 
     if response.status_code != 200:
-        if response.status_code in {400, 404, 405, 503}:
+        if response.status_code in {400, 404, 405, 500, 503}:
             notes.append(
                 "TFS code-content search is unavailable on this server. Using repository path matching instead."
             )
@@ -377,7 +377,7 @@ def search_repository_paths(
 def work_item_query_text(query: str, top: int, config: dict[str, str]) -> str:
     escaped = query.replace("'", "''")
     return f"""
-        SELECT TOP {top} [System.Id]
+        SELECT [System.Id]
         FROM WorkItems
         WHERE [System.TeamProject] = '{config["project"]}'
         AND (

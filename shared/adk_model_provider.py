@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from dotenv import dotenv_values, load_dotenv
 from google.adk.models.lite_llm import LiteLlm
+from google.genai import types
 
 DEFAULT_GOOGLE_MODEL = "gemini-2.0-flash"
 _AGENT_NAME_RE = re.compile(r"[^A-Z0-9]+")
@@ -120,6 +121,32 @@ def _build_google_model(agent_prefix: str) -> str:
         f"{agent_prefix}_MODEL",
     )
     return model or DEFAULT_GOOGLE_MODEL
+
+
+def build_agent_generation_config(
+    agent_name: str,
+) -> types.GenerateContentConfig | None:
+    agent_prefix = _agent_env_prefix(agent_name)
+    raw_max_output_tokens = _first_setting(
+        agent_prefix,
+        f"{agent_prefix}_MAX_OUTPUT_TOKENS",
+    )
+    if not raw_max_output_tokens:
+        return None
+
+    try:
+        max_output_tokens = int(raw_max_output_tokens)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"{agent_prefix}_MAX_OUTPUT_TOKENS must be an integer."
+        ) from exc
+
+    if max_output_tokens <= 0:
+        raise RuntimeError(
+            f"{agent_prefix}_MAX_OUTPUT_TOKENS must be greater than zero."
+        )
+
+    return types.GenerateContentConfig(max_output_tokens=max_output_tokens)
 
 
 def _build_azure_model(agent_prefix: str) -> LiteLlm:

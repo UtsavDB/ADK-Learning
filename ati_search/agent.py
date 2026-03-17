@@ -5,14 +5,16 @@ from google.adk.agents import Agent
 from ati_search.env import load_ati_search_env
 from ati_search.tools.avid_search import avid_search
 from ati_search.tools.tfs_git_search import tfs_git_search
-from shared import build_agent_model
+from shared import build_agent_generation_config, build_agent_model
 
 load_ati_search_env()
 AGENT_MODEL = build_agent_model("ati_search", default_provider="azure")
+AGENT_GENERATION_CONFIG = build_agent_generation_config("ati_search")
 
 root_agent = Agent(
     name="ati_search",
     model=AGENT_MODEL,
+    generate_content_config=AGENT_GENERATION_CONFIG,
     description="Searches internal Aristocrat documentation and TFS Git/work item data.",
     instruction=(
         "You are ATI Search. "

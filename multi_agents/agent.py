@@ -3,7 +3,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google.adk.agents import Agent
 
-from shared import build_agent_model
+from shared import build_agent_generation_config, build_agent_model
 
 AGENT_DIR = Path(__file__).resolve().parent
 
@@ -11,6 +11,7 @@ load_dotenv(dotenv_path=AGENT_DIR.parent / ".env", override=False)
 load_dotenv(dotenv_path=AGENT_DIR / ".env", override=True)
 
 AGENT_MODEL = build_agent_model("multi_agents", default_provider="azure")
+AGENT_GENERATION_CONFIG = build_agent_generation_config("multi_agents")
 
 
 def get_weather(city: str) -> dict:
@@ -61,6 +62,7 @@ def get_weather(city: str) -> dict:
 root_agent = Agent(
     name="travel_planner_agent",
     model=AGENT_MODEL,
+    generate_content_config=AGENT_GENERATION_CONFIG,
     description="An agent that helps users plan their travel itineraries.",
     instruction="You are a travel planner assistant. You can help users plan their travel itineraries by providing information about",
     tools=[get_weather])
