@@ -15,8 +15,7 @@ def get_weather(city: str) -> dict:
               Includes a 'status' key ('success' or 'error').
               If 'success', includes a 'report' key with weather details.
               If 'error', includes an 'error_message' key.
-              GOOGLE_API_KEY="AIzaSyDd0-TVzNI8EGsF6U84tu51qhzHaMe6A60"
-                GOOGLE_GENAI_USE_VERTEXAI=FALSE
+              
     """
     print(f"--- Tool: get_weather called for city: {city} ---")  # Log tool execution
     city_normalized = city.lower().replace(" ", "")  # Basic normalization
