@@ -1,7 +1,16 @@
-from google.adk.agents import Agent
-from google.adk.models.lite_llm import LiteLlm
+from pathlib import Path
 
-AGENT_MODEL = "gemini-3-flash-preview"
+from dotenv import load_dotenv
+from google.adk.agents import Agent
+
+from shared import build_agent_model
+
+AGENT_DIR = Path(__file__).resolve().parent
+
+load_dotenv(dotenv_path=AGENT_DIR.parent / ".env", override=False)
+load_dotenv(dotenv_path=AGENT_DIR / ".env", override=True)
+
+AGENT_MODEL = build_agent_model("multi_agents", default_provider="azure")
 
 
 def get_weather(city: str) -> dict:

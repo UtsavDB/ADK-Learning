@@ -1,0 +1,27 @@
+2026-03-17 14:10:19,444 - INFO - service_factory.py:266 - Using in-memory memory service
+2026-03-17 14:10:19,445 - INFO - local_storage.py:84 - Using per-agent session storage rooted at C:\W\GIT\Experiments\ADK-Learning
+2026-03-17 14:10:19,447 - INFO - local_storage.py:110 - Using file artifact service at C:\W\GIT\Experiments\ADK-Learning\.adk\artifacts
+C:\W\GIT\Experiments\ADK-Learning\.venv\Lib\site-packages\google\adk\cli\fast_api.py:192: UserWarning: [EXPERIMENTAL] InMemoryCredentialService: This feature is experimental and may change or be removed in future versions without notice. It may introduce breaking changes at any time.
+  credential_service = InMemoryCredentialService()
+C:\W\GIT\Experiments\ADK-Learning\.venv\Lib\site-packages\google\adk\auth\credential_service\in_memory_credential_service.py:33: UserWarning: [EXPERIMENTAL] BaseCredentialService: This feature is experimental and may change or be removed in future versions without notice. It may introduce breaking changes at any time.
+  super().__init__()
+INFO:     Started server process [39164]
+INFO:     Waiting for application startup.
+
++-----------------------------------------------------------------------------+
+| ADK Web Server started                                                      |
+|                                                                             |
+| For local testing, access at http://127.0.0.1:8011.                         |
++-----------------------------------------------------------------------------+
+
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8011 (Press CTRL+C to quit)
+2026-03-17 14:10:49,181 - INFO - envs.py:83 - Loaded .env file for multi_agents at C:\W\GIT\Experiments\ADK-Learning\multi_agents\.env
+2026-03-17 14:10:49,185 - INFO - envs.py:83 - Loaded .env file for multi_agents at C:\W\GIT\Experiments\ADK-Learning\multi_agents\.env
+2026-03-17 14:10:49,195 - INFO - agent_loader.py:130 - Found root_agent in multi_agents.agent
+2026-03-17 14:10:49,238 - INFO - local_storage.py:60 - Creating local session service at C:\W\GIT\Experiments\ADK-Learning\multi_agents\.adk\session.db
+INFO:     127.0.0.1:50579 - "POST /run HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:50580 - "GET /list-apps HTTP/1.1" 200 OK
+2026-03-17 14:10:50,027 - INFO - adk_web_server.py:669 - New session created: s3
+INFO:     127.0.0.1:50581 - "POST /apps/multi_agents/users/u1/sessions/s3 HTTP/1.1" 200 OK
+^C
