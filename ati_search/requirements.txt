@@ -1,3 +1,10 @@
 google-adk>=1.26.0
 python-dotenv>=1.0.1
 requests>=2.32.0
+sentence-transformers>=3.0.0
+openai>=1.68.0
+pytest>=8.0.0
+# Optional later-stage vector index support:
+# faiss-cpu>=1.8.0
+# Optional reranking note: use sentence-transformers CrossEncoder when enabled.
+# cross-encoder

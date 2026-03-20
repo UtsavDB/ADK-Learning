@@ -4,6 +4,7 @@ from google.adk.agents import Agent
 
 from ati_search.env import load_ati_search_env
 from ati_search.tools.avid_search import avid_search
+from ati_search.tools.semantic_tool import semantic_search_tool
 from ati_search.tools.tfs_git_search import tfs_git_search
 from shared import build_agent_generation_config, build_agent_model
 
@@ -31,5 +32,5 @@ root_agent = Agent(
         "If no useful results are found, say so clearly. "
         "Keep the final answer plain text and do not dump raw JSON unless the user explicitly asks for it."
     ),
-    tools=[avid_search, tfs_git_search],
+    tools=[avid_search, tfs_git_search, semantic_search_tool],
 )

@@ -141,3 +141,30 @@ Search TFS work items and Git in repo ScrumMaster2 for burndown
 - The tools return both a normalized summary and internal raw payloads.
 - The agent is instructed to present results to users in plain English.
 - Pagination is intentionally not implemented yet; this demo always calls page `1`.
+
+## Semantic extension
+
+The semantic extension adds an additive concept layer without replacing `avid_search` or `tfs_git_search`.
+
+- `mapping.py`: SQLite-backed `term_map` ontology plus `map_change_log` audit trail at `ati_search/data/ati_mapping.db`
+- `llm_extractor.py`: strict JSON concept extraction with ADK-provider preference and `OPENAI_API_KEY` fallback
+- `tools/semantic_tool.py`: parallel documentation and defect search, mapping expansion, semantic scoring, and reranking
+- `seed_mapping_demo.py`: creates the database and seeds a demo `player_merge` mapping with related term `unimerge`
+
+Seed the demo mapping:
+
+```bash
+python -m ati_search.seed_mapping_demo
+```
+
+Run tests:
+
+```bash
+pytest tests/test_semantic_tool.py
+```
+
+LLM configuration:
+
+- Preferred: reuse the repo ADK provider via `shared.adk_model_provider.build_agent_model`
+- Fallback: set `OPENAI_API_KEY` and optionally `ATI_SEARCH_OPENAI_MODEL`
+- Sentence embeddings default to `all-MiniLM-L6-v2`; enable optional CrossEncoder reranking with `ATI_SEARCH_ENABLE_CROSS_ENCODER=1`

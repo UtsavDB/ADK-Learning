@@ -11,6 +11,7 @@ os.environ.setdefault("ATI_SEARCH_PROVIDER", "google")
 from ati_search import agent
 from ati_search import env as ati_env
 from ati_search.env import get_env_value, read_dotenv_layers
+from ati_search.tools.semantic_tool import semantic_search_tool
 from ati_search.tools import tfs_git_search as tfs_tool
 
 
@@ -402,7 +403,8 @@ class AtiSearchAgentTest(unittest.TestCase):
 
     def test_root_agent_exposes_both_tools(self) -> None:
         self.assertTrue(hasattr(agent.root_agent, "tools"))
-        self.assertEqual(len(agent.root_agent.tools), 2)
+        self.assertEqual(len(agent.root_agent.tools), 3)
+        self.assertIn(semantic_search_tool, agent.root_agent.tools)
 
 
 if __name__ == "__main__":
