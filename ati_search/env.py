@@ -20,10 +20,11 @@ def dotenv_paths() -> list[Path]:
     ]
 
 
-def load_ati_search_env() -> None:
-    for path in dotenv_paths():
+def load_ati_search_env(override: bool = False) -> None:
+    paths = list(reversed(dotenv_paths())) if override else dotenv_paths()
+    for path in paths:
         if path.exists():
-            load_dotenv(dotenv_path=path, override=False)
+            load_dotenv(dotenv_path=path, override=override)
 
 
 def read_dotenv_layers(paths: list[Path] | None = None) -> dict[str, str]:

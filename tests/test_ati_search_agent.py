@@ -9,6 +9,7 @@ import requests
 os.environ.setdefault("ATI_SEARCH_PROVIDER", "google")
 
 from ati_search import agent
+from ati_search import env as ati_env
 from ati_search.env import get_env_value, read_dotenv_layers
 from ati_search.tools import tfs_git_search as tfs_tool
 
@@ -55,6 +56,38 @@ class AtiSearchAgentTest(unittest.TestCase):
             value = get_env_value("ATI_SEARCH_BEARER_TOKEN", {"ATI_SEARCH_BEARER_TOKEN": "file"})
 
         self.assertEqual(value, "runtime")
+
+    def test_ati_search_env_reload_can_override_shared_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            local = temp_path / "local.env"
+            shared = temp_path / "shared.env"
+            root = temp_path / "root.env"
+            fallback = temp_path / "fallback.env"
+
+            local.write_text("TFS_URL=http://local\nPROJECT=Local\nPAT=local\n", encoding="utf-8")
+            shared.write_text("TFS_URL=http://shared\nPROJECT=Shared\nPAT=shared\n", encoding="utf-8")
+            root.write_text("TFS_URL=http://root\nPROJECT=Root\nPAT=root\n", encoding="utf-8")
+            fallback.write_text("TFS_URL=http://fallback\nPROJECT=Fallback\nPAT=fallback\n", encoding="utf-8")
+
+            with patch.object(
+                ati_env,
+                "dotenv_paths",
+                return_value=[local, shared, root, fallback],
+            ):
+                with patch.dict(
+                    "os.environ",
+                    {"TFS_URL": "http://shared", "PROJECT": "Shared", "PAT": "shared"},
+                    clear=True,
+                ):
+                    ati_env.load_ati_search_env(override=True)
+                    config, error = tfs_tool.get_tfs_config()
+
+                    self.assertIsNone(error)
+                    self.assertIsNotNone(config)
+                    self.assertEqual(config["tfs_url"], "http://local")
+                    self.assertEqual(config["project"], "Local")
+                    self.assertEqual(config["pat"], "local")
 
     def test_missing_tfs_config_returns_error(self) -> None:
         with patch.object(
@@ -127,6 +160,112 @@ class AtiSearchAgentTest(unittest.TestCase):
         self.assertEqual(result["summary"]["work_item_matches"][0]["id"], "42")
         self.assertIn("code_search", result["raw"])
         self.assertIn("work_items", result["raw"])
+
+    def test_tfs_git_search_can_skip_git_and_filter_work_items(self) -> None:
+        config = {
+            "tfs_url": "http://tfs",
+            "project": "Proj",
+            "pat": "pat",
+            "api_version": "4.1",
+            "default_repo": "",
+        }
+        work_items = [
+            {
+                "id": "42",
+                "title": "DAP migration failing",
+                "ATI.Bug.Description": "DAP bug details",
+                "state": "Resolved",
+                "work_item_type": "Defect",
+                "assigned_to": None,
+                "changed_date": "2026-03-17",
+                "url": "http://tfs/Proj/_workitems/edit/42",
+            }
+        ]
+
+        with patch.dict(
+            "os.environ",
+            {"TFS_URL": "http://tfs", "PROJECT": "Proj", "PAT": "pat"},
+            clear=True,
+        ):
+            with patch.object(tfs_tool, "list_repositories") as list_repositories_mock:
+                with patch.object(
+                    tfs_tool,
+                    "search_work_items",
+                    return_value=(work_items, [], {"work_items": {"ok": True}}),
+                ) as search_work_items_mock:
+                    result = tfs_tool.tfs_git_search(
+                        "DAP",
+                        include_git_matches=False,
+                        work_item_type="Defect",
+                        work_item_search_fields=["System.Title", "ATI.Bug.Description"],
+                        top=1,
+                    )
+
+        list_repositories_mock.assert_not_called()
+        search_work_items_mock.assert_called_once_with(
+            "DAP",
+            config,
+            1,
+            work_item_type="Defect",
+            search_fields=["System.Title", "ATI.Bug.Description"],
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["summary"]["git_matches"], [])
+        self.assertEqual(result["summary"]["work_item_matches"][0]["title"], "DAP migration failing")
+        self.assertEqual(
+            result["summary"]["work_item_matches"][0]["ATI.Bug.Description"],
+            "DAP bug details",
+        )
+
+    def test_tfs_git_search_infers_defect_work_item_search_from_natural_language_query(self) -> None:
+        config = {
+            "tfs_url": "http://tfs",
+            "project": "Proj",
+            "pat": "pat",
+            "api_version": "4.1",
+            "default_repo": "",
+        }
+        work_items = [
+            {
+                "id": "42",
+                "title": "DAP migration failing",
+                "ATI.Bug.Description": "DAP defect details",
+                "state": "Active",
+                "work_item_type": "Defect",
+                "assigned_to": None,
+                "changed_date": "2026-03-17",
+                "url": "http://tfs/Proj/_workitems/edit/42",
+            }
+        ]
+
+        with patch.dict(
+            "os.environ",
+            {"TFS_URL": "http://tfs", "PROJECT": "Proj", "PAT": "pat"},
+            clear=True,
+        ):
+            with patch.object(tfs_tool, "list_repositories") as list_repositories_mock:
+                with patch.object(
+                    tfs_tool,
+                    "search_work_items",
+                    return_value=(work_items, [], {"work_items": {"ok": True}}),
+                ) as search_work_items_mock:
+                    result = tfs_tool.tfs_git_search("can you find DAP defects", top=3)
+
+        list_repositories_mock.assert_not_called()
+        search_work_items_mock.assert_called_once_with(
+            "DAP",
+            config,
+            3,
+            work_item_type=["Defect", "Bug"],
+            search_fields=["System.Title", "System.Tags", "ATI.Bug.Description"],
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["summary"]["requested_query"], "can you find DAP defects")
+        self.assertEqual(result["summary"]["query"], "DAP")
+        self.assertEqual(result["summary"]["git_matches"], [])
+        self.assertTrue(
+            any("Skipped Git" in note or "Normalized the search text" in note for note in result["summary"]["notes"])
+        )
 
     def test_repository_listing_http_error_is_reported(self) -> None:
         config = {
@@ -218,6 +357,48 @@ class AtiSearchAgentTest(unittest.TestCase):
 
         self.assertIn("SELECT [System.Id]", query)
         self.assertNotIn("TOP 5", query)
+
+    def test_work_item_query_text_filters_defects_and_requested_fields(self) -> None:
+        config = {
+            "tfs_url": "http://tfs",
+            "project": "Proj",
+            "pat": "pat",
+            "api_version": "4.1",
+            "default_repo": "",
+        }
+
+        query = tfs_tool.work_item_query_text(
+            "DAP",
+            5,
+            config,
+            search_fields=["System.Title", "ATI.Bug.Description"],
+            work_item_type="Defect",
+        )
+
+        self.assertIn("[System.WorkItemType] = 'Defect'", query)
+        self.assertIn("[System.Title] CONTAINS 'DAP'", query)
+        self.assertIn("[ATI.Bug.Description] CONTAINS 'DAP'", query)
+
+    def test_work_item_query_text_supports_multiple_work_item_types(self) -> None:
+        config = {
+            "tfs_url": "http://tfs",
+            "project": "Proj",
+            "pat": "pat",
+            "api_version": "4.1",
+            "default_repo": "",
+        }
+
+        query = tfs_tool.work_item_query_text(
+            "DAP",
+            5,
+            config,
+            search_fields=["System.Title", "ATI.Bug.Description"],
+            work_item_type=["Defect", "Bug"],
+        )
+
+        self.assertIn("[System.WorkItemType] IN ('Defect', 'Bug')", query)
+        self.assertIn("[System.Title] CONTAINS 'DAP'", query)
+        self.assertIn("[ATI.Bug.Description] CONTAINS 'DAP'", query)
 
     def test_root_agent_exposes_both_tools(self) -> None:
         self.assertTrue(hasattr(agent.root_agent, "tools"))

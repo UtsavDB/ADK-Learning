@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from typing import Any
 
 import requests
@@ -17,6 +19,20 @@ from ati_search.tool_utils import (
     strip_html_tags,
 )
 
+DEFAULT_DEFECT_SEARCH_FIELDS = ["System.Title", "System.Tags", "ATI.Bug.Description"]
+DEFECT_WORK_ITEM_TYPES = ["Defect", "Bug"]
+DEFECT_KEYWORD_RE = re.compile(r"\b(defect|defects|bug|bugs)\b", re.IGNORECASE)
+WORK_ITEM_TERM_RE = re.compile(r"\b(work\s*items?|tickets?|issues?)\b", re.IGNORECASE)
+CODE_SEARCH_TERM_RE = re.compile(
+    r"\b(repo|repos|repository|repositories|git|code|file|files|path|paths|branch|source)\b",
+    re.IGNORECASE,
+)
+LEADING_SEARCH_VERB_RE = re.compile(
+    r"^(?:can you|could you|would you|please|kindly|find|search(?: for)?|look up|lookup|show(?: me)?|list|get|fetch)\b[\s,:-]*",
+    re.IGNORECASE,
+)
+TRAILING_PUNCTUATION_RE = re.compile(r"^[\s?.!,:;]+|[\s?.!,:;]+$")
+
 
 def tfs_auth(config: dict[str, str]) -> HTTPBasicAuth:
     return HTTPBasicAuth("", config["pat"])
@@ -30,6 +46,78 @@ def tfs_error_response(error_type: str, message: str, **extra: Any) -> dict[str,
     }
     response.update(extra)
     return response
+
+
+def normalize_work_item_types(work_item_type: str | Sequence[str] | None) -> list[str]:
+    if work_item_type is None:
+        return []
+    if isinstance(work_item_type, str):
+        values = [work_item_type]
+    else:
+        values = list(work_item_type)
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = clean_text(value)
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized.append(cleaned)
+    return normalized
+
+
+def infer_search_options(
+    query: str,
+    *,
+    repo_name: str | None,
+    include_git_matches: bool,
+    work_item_type: str | Sequence[str] | None,
+    work_item_search_fields: list[str] | None,
+) -> tuple[str, bool, str | list[str] | None, list[str] | None, list[str]]:
+    effective_query = clean_text(query) or ""
+    while True:
+        stripped_query = LEADING_SEARCH_VERB_RE.sub("", effective_query, count=1)
+        if stripped_query == effective_query:
+            break
+        effective_query = stripped_query
+    effective_query = TRAILING_PUNCTUATION_RE.sub("", effective_query)
+
+    notes: list[str] = []
+    has_defect_intent = bool(DEFECT_KEYWORD_RE.search(effective_query))
+    has_code_intent = bool(CODE_SEARCH_TERM_RE.search(effective_query))
+
+    if has_defect_intent:
+        stripped_query = DEFECT_KEYWORD_RE.sub(" ", effective_query)
+        stripped_query = WORK_ITEM_TERM_RE.sub(" ", stripped_query)
+        stripped_query = clean_text(stripped_query) or ""
+        if stripped_query:
+            effective_query = stripped_query
+
+        if work_item_search_fields is None:
+            work_item_search_fields = DEFAULT_DEFECT_SEARCH_FIELDS.copy()
+
+        if work_item_type is None:
+            work_item_type = DEFECT_WORK_ITEM_TYPES.copy()
+            notes.append(
+                "Interpreted the request as a defect search and matched work item types Defect or Bug."
+            )
+
+        if include_git_matches and not repo_name and not has_code_intent:
+            include_git_matches = False
+            notes.append(
+                "Skipped Git and repository path search because the request looked like a work item defect search."
+            )
+
+    normalized_query = clean_text(effective_query) or clean_text(query) or ""
+    original_query = clean_text(query) or ""
+    if normalized_query and normalized_query.lower() != original_query.lower():
+        notes.append(f"Normalized the search text from '{original_query}' to '{normalized_query}'.")
+
+    return normalized_query, include_git_matches, work_item_type, work_item_search_fields, notes
 
 
 def get_tfs_config(
@@ -88,6 +176,84 @@ def project_url(config: dict[str, str], suffix: str) -> str:
 
 def collection_url(config: dict[str, str], suffix: str) -> str:
     return f"{config['tfs_url']}{suffix}"
+
+
+def field_reference_name(field_name: str) -> str | None:
+    normalized = clean_text(field_name)
+    if not normalized:
+        return None
+    if "." in normalized and " " not in normalized:
+        return normalized
+    return None
+
+
+def resolve_work_item_field_references(
+    config: dict[str, str],
+    search_fields: list[str] | None,
+) -> tuple[list[str], list[str], dict[str, Any]]:
+    if not search_fields:
+        return ["System.Title", "System.Tags"], [], {}
+
+    resolved: list[str] = []
+    unresolved: list[str] = []
+    raw: dict[str, Any] = {}
+    pending = [field for field in search_fields if clean_text(field)]
+    direct = [field for field in pending if field_reference_name(field)]
+    lookup = [field for field in pending if field not in direct]
+
+    resolved.extend(field_reference_name(field) for field in direct if field_reference_name(field))
+    if not lookup:
+        return resolved, unresolved, raw
+
+    fields_url = collection_url(config, "/_apis/wit/fields")
+    try:
+        response = tfs_request(
+            "GET",
+            fields_url,
+            config,
+            params={"api-version": config["api_version"]},
+        )
+    except requests.Timeout:
+        return resolved, lookup, raw
+    except requests.RequestException:
+        return resolved, lookup, raw
+
+    if response.status_code != 200:
+        raw["wit_fields"] = {
+            "status_code": response.status_code,
+            "response_text": clean_text(response.text),
+        }
+        return resolved, lookup, raw
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return resolved, lookup, raw
+
+    raw["wit_fields"] = payload
+    available_fields = payload.get("value", [])
+    by_name: dict[str, str] = {}
+    by_reference: dict[str, str] = {}
+    for item in available_fields:
+        if not isinstance(item, dict):
+            continue
+        name = clean_text(item.get("name"))
+        reference_name = clean_text(item.get("referenceName"))
+        if name and reference_name:
+            by_name[name.lower()] = reference_name
+            by_reference[reference_name.lower()] = reference_name
+
+    for field in lookup:
+        normalized = clean_text(field)
+        if not normalized:
+            continue
+        match = by_reference.get(normalized.lower()) or by_name.get(normalized.lower())
+        if match:
+            resolved.append(match)
+        else:
+            unresolved.append(normalized)
+
+    return resolved, unresolved, raw
 
 
 def normalize_repo(repo: dict[str, Any], config: dict[str, str]) -> dict[str, Any]:
@@ -315,6 +481,13 @@ def normalize_path_match(
     }
 
 
+def branch_name_from_ref(ref: str | None) -> str | None:
+    if not ref:
+        return None
+    prefix = "refs/heads/"
+    return ref[len(prefix) :] if ref.startswith(prefix) else ref
+
+
 def search_repository_paths(
     query: str,
     repositories: list[dict[str, Any]],
@@ -341,8 +514,18 @@ def search_repository_paths(
             "latestProcessedChange": "true",
             "api-version": config["api_version"],
         }
+        branch_name = branch_name_from_ref(repo.get("default_branch"))
+        if branch_name:
+            params["versionDescriptor.versionType"] = "branch"
+            params["versionDescriptor.version"] = branch_name
         try:
-            response = tfs_request("GET", url, config, params=params)
+            response = tfs_request(
+                "GET",
+                url,
+                config,
+                params=params,
+                timeout=max(TFS_TIMEOUT_SECONDS, 60),
+            )
         except requests.Timeout:
             notes.append(f"Timed out while scanning repository '{repo['name']}'.")
             continue
@@ -374,15 +557,34 @@ def search_repository_paths(
     return matches, notes, {"path_search": raw_items}
 
 
-def work_item_query_text(query: str, top: int, config: dict[str, str]) -> str:
+def work_item_query_text(
+    query: str,
+    top: int,
+    config: dict[str, str],
+    *,
+    search_fields: list[str] | None = None,
+    work_item_type: str | Sequence[str] | None = None,
+) -> str:
     escaped = query.replace("'", "''")
+    clauses = []
+    for field_name in search_fields or ["System.Title", "System.Tags"]:
+        clauses.append(f"[{field_name}] CONTAINS '{escaped}'")
+    filters = [f"[System.TeamProject] = '{config['project']}'"]
+    work_item_types = normalize_work_item_types(work_item_type)
+    if len(work_item_types) == 1:
+        escaped_work_item_type = work_item_types[0].replace("'", "''")
+        filters.append(f"[System.WorkItemType] = '{escaped_work_item_type}'")
+    elif work_item_types:
+        escaped_work_item_types = ", ".join(
+            "'" + item.replace("'", "''") + "'" for item in work_item_types
+        )
+        filters.append(f"[System.WorkItemType] IN ({escaped_work_item_types})")
     return f"""
         SELECT [System.Id]
         FROM WorkItems
-        WHERE [System.TeamProject] = '{config["project"]}'
+        WHERE {" AND ".join(filters)}
         AND (
-            [System.Title] CONTAINS '{escaped}'
-            OR [System.Tags] CONTAINS '{escaped}'
+            {" OR ".join(clauses)}
         )
         ORDER BY [System.ChangedDate] DESC
     """
@@ -394,6 +596,7 @@ def normalize_work_item(item: dict[str, Any], config: dict[str, str]) -> dict[st
     return {
         "id": work_item_id,
         "title": pick_first(fields.get("System.Title")),
+        "ATI.Bug.Description": strip_html_tags(fields.get("ATI.Bug.Description")),
         "state": pick_first(fields.get("System.State")),
         "work_item_type": pick_first(fields.get("System.WorkItemType")),
         "assigned_to": pick_first(fields.get("System.AssignedTo")),
@@ -410,6 +613,9 @@ def search_work_items(
     query: str,
     config: dict[str, str],
     top: int,
+    *,
+    work_item_type: str | Sequence[str] | None = None,
+    search_fields: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
     if top <= 0:
         return [], [], {}
@@ -417,6 +623,19 @@ def search_work_items(
     wiql_url = project_url(config, "/_apis/wit/wiql")
     notes: list[str] = []
     raw: dict[str, Any] = {}
+    resolved_search_fields, unresolved_fields, field_raw = resolve_work_item_field_references(
+        config,
+        search_fields,
+    )
+    raw.update(field_raw)
+    if unresolved_fields:
+        notes.append(
+            "Could not resolve work item search fields: "
+            + ", ".join(unresolved_fields)
+            + "."
+        )
+    if not resolved_search_fields:
+        return [], notes, raw
 
     try:
         wiql_response = tfs_request(
@@ -424,7 +643,15 @@ def search_work_items(
             wiql_url,
             config,
             params={"api-version": config["api_version"]},
-            json_body={"query": work_item_query_text(query, top, config)},
+            json_body={
+                "query": work_item_query_text(
+                    query,
+                    top,
+                    config,
+                    search_fields=resolved_search_fields,
+                    work_item_type=work_item_type,
+                )
+            },
         )
     except requests.Timeout:
         notes.append("TFS work item search timed out.")
@@ -457,6 +684,7 @@ def search_work_items(
         [
             "System.Id",
             "System.Title",
+            "ATI.Bug.Description",
             "System.State",
             "System.WorkItemType",
             "System.AssignedTo",
@@ -509,7 +737,10 @@ def tfs_git_search(
     query: str,
     repo_name: str | None = None,
     include_work_items: bool = True,
+    include_git_matches: bool = True,
     top: int = DEFAULT_TFS_RESULT_LIMIT,
+    work_item_type: str | Sequence[str] | None = None,
+    work_item_search_fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """Search TFS/Azure DevOps Git repositories and optionally related work items."""
     cleaned_query = clean_text(query)
@@ -521,6 +752,20 @@ def tfs_git_search(
     except (TypeError, ValueError):
         return tfs_error_response("validation_error", "'top' must be an integer between 1 and 50.")
 
+    (
+        effective_query,
+        effective_include_git_matches,
+        effective_work_item_type,
+        effective_work_item_search_fields,
+        inferred_notes,
+    ) = infer_search_options(
+        cleaned_query,
+        repo_name=repo_name,
+        include_git_matches=include_git_matches,
+        work_item_type=work_item_type,
+        work_item_search_fields=work_item_search_fields,
+    )
+
     config, config_error = get_tfs_config()
     if config is None:
         return tfs_error_response(
@@ -528,54 +773,60 @@ def tfs_git_search(
             config_error or "Missing TFS configuration.",
         )
 
-    repositories, repo_list_error = list_repositories(config)
-    if repositories is None:
-        return repo_list_error or tfs_error_response(
-            "request_error",
-            "Failed to list TFS repositories.",
-        )
+    selected_repositories: list[dict[str, Any]] = []
+    if effective_include_git_matches:
+        repositories, repo_list_error = list_repositories(config)
+        if repositories is None:
+            return repo_list_error or tfs_error_response(
+                "request_error",
+                "Failed to list TFS repositories.",
+            )
 
-    selected_repositories, repo_selection_error = resolve_repositories(repositories, repo_name)
-    if selected_repositories is None:
-        return repo_selection_error or tfs_error_response(
-            "unknown_repository",
-            "Repository not found.",
-        )
+        selected_repositories, repo_selection_error = resolve_repositories(repositories, repo_name)
+        if selected_repositories is None:
+            return repo_selection_error or tfs_error_response(
+                "unknown_repository",
+                "Repository not found.",
+            )
 
-    notes: list[str] = []
+    notes: list[str] = list(inferred_notes)
     raw: dict[str, Any] = {}
+    git_matches: list[dict[str, Any]] = []
 
-    try:
-        git_matches, code_search_notes, code_search_raw = search_code_api(
-            cleaned_query,
-            selected_repositories,
-            config,
-            normalized_top,
-        )
-    except RuntimeError as exc:
-        return tfs_error_response("http_error", str(exc))
+    if effective_include_git_matches:
+        try:
+            git_matches, code_search_notes, code_search_raw = search_code_api(
+                effective_query,
+                selected_repositories,
+                config,
+                normalized_top,
+            )
+        except RuntimeError as exc:
+            return tfs_error_response("http_error", str(exc))
 
-    notes.extend(code_search_notes)
-    raw.update(code_search_raw)
+        notes.extend(code_search_notes)
+        raw.update(code_search_raw)
 
-    if not git_matches:
-        fallback_matches, fallback_notes, fallback_raw = search_repository_paths(
-            cleaned_query,
-            selected_repositories,
-            config,
-            normalized_top,
-        )
-        notes.extend(fallback_notes)
-        raw.update(fallback_raw)
-        git_matches = fallback_matches
+        if not git_matches:
+            fallback_matches, fallback_notes, fallback_raw = search_repository_paths(
+                effective_query,
+                selected_repositories,
+                config,
+                normalized_top,
+            )
+            notes.extend(fallback_notes)
+            raw.update(fallback_raw)
+            git_matches = fallback_matches
 
     work_item_limit = max(0, normalized_top - len(git_matches))
     work_item_matches: list[dict[str, Any]] = []
     if include_work_items and work_item_limit > 0:
         work_item_matches, work_item_notes, work_item_raw = search_work_items(
-            cleaned_query,
+            effective_query,
             config,
             work_item_limit,
+            work_item_type=effective_work_item_type,
+            search_fields=effective_work_item_search_fields,
         )
         notes.extend(work_item_notes)
         raw.update(work_item_raw)
@@ -583,7 +834,8 @@ def tfs_git_search(
     return {
         "status": "success",
         "summary": {
-            "query": cleaned_query,
+            "requested_query": cleaned_query,
+            "query": effective_query,
             "repositories_scanned": [repo["name"] for repo in selected_repositories],
             "git_matches": git_matches[:normalized_top],
             "work_item_matches": work_item_matches[
