@@ -11,6 +11,8 @@ os.environ.setdefault("ATI_SEARCH_PROVIDER", "google")
 from ati_search import agent
 from ati_search import env as ati_env
 from ati_search.env import get_env_value, read_dotenv_layers
+from ati_search.tools import competition_search as competition_search_tool
+from ati_search.tools.competition_search import competition_search
 from ati_search.tools import tfs_git_search as tfs_tool
 
 
@@ -400,9 +402,23 @@ class AtiSearchAgentTest(unittest.TestCase):
         self.assertIn("[System.Title] CONTAINS 'DAP'", query)
         self.assertIn("[ATI.Bug.Description] CONTAINS 'DAP'", query)
 
-    def test_root_agent_exposes_both_tools(self) -> None:
+    def test_root_agent_exposes_competition_search_tool(self) -> None:
         self.assertTrue(hasattr(agent.root_agent, "tools"))
-        self.assertEqual(len(agent.root_agent.tools), 2)
+        self.assertEqual(len(agent.root_agent.tools), 3)
+        self.assertIn(competition_search, agent.root_agent.tools)
+        self.assertEqual(competition_search.name, "competition_search")
+
+    def test_competition_search_model_uses_ati_search_model_fallback(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "ATI_SEARCH_MODEL": "gemini-legacy",
+            },
+            clear=True,
+        ):
+            model = competition_search_tool._competition_search_model()
+
+        self.assertEqual(model, "gemini-legacy")
 
 
 if __name__ == "__main__":

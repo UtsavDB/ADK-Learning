@@ -1,4 +1,7 @@
 from __future__ import annotations
+"""
+This module provides the `avid_search` function, which enables searching Aristocrat documentation using a free-form text query. It interacts with the Aristocrat Knowledge Hub API to retrieve clustered search results, normalizes and deduplicates the entries, and returns a structured summary of the most relevant documentation topics. The module also includes utility functions for building API requests, handling errors, and processing the API response into a user-friendly format.
+"""
 
 from typing import Any
 
